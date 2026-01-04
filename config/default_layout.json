@@ -1,0 +1,46 @@
+{
+  "sources": [
+    {
+      "id": "hdmi",
+      "type": "hdmi",
+      "device": "/dev/video0",
+      "position": {"x": 0, "y": 0},
+      "size": {"width": 1920, "height": 1080},
+      "z_order": 0
+    },
+    {
+      "id": "camera1",
+      "type": "usb",
+      "device": "/dev/video1",
+      "position": {"x": 1600, "y": 0},
+      "size": {"width": 320, "height": 240},
+      "z_order": 1
+    }
+  ],
+  "overlays": [
+    {
+      "image": "config/overlays/logo.png",
+      "position": {"x": 10, "y": 10},
+      "size": {"width": 200, "height": 100},
+      "opacity": 0.8
+    }
+  ],
+  "output": {
+    "width": 1920,
+    "height": 1080,
+    "fps": 30
+  },
+  "stop_frame": {
+    "enabled": true,
+    "image": "config/stop_frame.png",
+    "threshold": 0.85,
+    "check_interval": 1.0
+  },
+  "audio": {
+    "mic_enabled": true,
+    "game_audio_enabled": true,
+    "mic_source": "default",
+    "game_audio_source": "default"
+  }
+}
+
