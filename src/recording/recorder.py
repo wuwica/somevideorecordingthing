@@ -2,77 +2,54 @@
 import gi
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, TYPE_CHECKING
 import os
 from datetime import datetime
 
-from src.capture.video_capture import VideoCaptureManager
 from src.capture.audio_capture import AudioCapture, AudioMixer
 from src.composition.layout_engine import LayoutEngine
 from src.composition.overlay_manager import OverlayManager
-from src.recording.frame_detector import FrameDetector
+
+if TYPE_CHECKING:
+    from src.recording.trigger_manager import TriggerManager
 
 
 class Recorder:
     """Main recording controller."""
-    
+
     def __init__(self, config_path: str, output_directory: str = "./recordings"):
-        """
-        Initialize recorder.
-        
-        Args:
-            config_path: Path to layout configuration JSON
-            output_directory: Directory to save recordings
-        """
         self.config_path = config_path
         self.output_directory = output_directory
         self.layout_engine = LayoutEngine(config_path)
-        self.video_manager = VideoCaptureManager()
         self.audio_captures: List[AudioCapture] = []
         self.audio_mixer: Optional[AudioMixer] = None
         self.overlay_manager: Optional[OverlayManager] = None
-        self.frame_detector: Optional[FrameDetector] = None
-        
+        self._trigger_manager: Optional["TriggerManager"] = None
+
         self.recording_pipeline: Optional[Gst.Pipeline] = None
         self.is_recording = False
         self.current_output_path: Optional[str] = None
-        
-        # Ensure output directory exists
+
         os.makedirs(self.output_directory, exist_ok=True)
-        
+
         Gst.init(None)
         self._setup_from_config()
+
+    def set_trigger_manager(self, trigger_manager: "TriggerManager"):
+        """Inject the TriggerManager used for audio/frame stop triggers."""
+        self._trigger_manager = trigger_manager
     
     def _setup_from_config(self):
         """Setup components based on configuration."""
         config = self.layout_engine.config
-        
-        # Setup overlays
         overlays_config = config.get("overlays", [])
         self.overlay_manager = OverlayManager(overlays_config)
-        
-        # Setup frame detector if enabled
-        stop_frame_config = config.get("stop_frame", {})
-        if stop_frame_config.get("enabled", False):
-            frame_image = stop_frame_config.get("image")
-            threshold = stop_frame_config.get("threshold", 0.85)
-            check_interval = stop_frame_config.get("check_interval", 1.0)
-            
-            if frame_image and os.path.exists(frame_image):
-                self.frame_detector = FrameDetector(frame_image, threshold, check_interval)
-                self.frame_detector.set_callback(self.stop_recording)
     
     def add_video_source(self, device_path: str, source_id: str):
-        """Add a video source."""
-        # Create callback for frame detection if needed
-        callback = None
-        if self.frame_detector:
-            def frame_callback(src_id, frame_data, width, height):
-                if src_id == "hdmi":  # Only check HDMI feed
-                    self.frame_detector.add_frame(frame_data, width, height)
-            callback = frame_callback
-        
-        self.video_manager.add_source(device_path, source_id, callback)
+        """Register a video source for inclusion in the next recording pipeline."""
+        # Sources are built directly from layout_engine.config in build_recording_pipeline.
+        # This method exists so RecordingController can declare devices; the config is the
+        # authoritative source of device paths actually used in the pipeline.
     
     def setup_audio(self, mic_source: Optional[str] = None, game_audio_source: Optional[str] = None):
         """Setup audio capture sources."""
@@ -239,16 +216,60 @@ class Recorder:
             mixer_src.link(audio_convert_final.get_static_pad("sink"))
             audio_convert_final.link(audio_resample_final)
             
-            # Audio encoder
+            # Tee: branch 1 → encoder, branch 2 → trigger appsink
+            audio_tee = Gst.ElementFactory.make("tee", "audio-tee")
+            pipeline.add(audio_tee)
+            audio_resample_final.link(audio_tee)
+
+            # Branch 1: encode → mux
+            queue_enc = Gst.ElementFactory.make("queue", "audio-queue-enc")
+            pipeline.add(queue_enc)
+            audio_tee.link(queue_enc)
+
             audio_encoder = Gst.ElementFactory.make("avenc_aac", "audio-encoder")
             audio_encoder.set_property("bitrate", 128000)
             audio_parser = Gst.ElementFactory.make("aacparse", "audio-parser")
-            
+
             pipeline.add(audio_encoder)
             pipeline.add(audio_parser)
-            
-            audio_resample_final.link(audio_encoder)
+
+            queue_enc.link(audio_encoder)
             audio_encoder.link(audio_parser)
+
+            # Branch 2: feed raw PCM to AudioTrigger (only wired when trigger is active)
+            if self._trigger_manager and self._trigger_manager.audio_ready:
+                queue_trigger = Gst.ElementFactory.make("queue", "audio-queue-trigger")
+                queue_trigger.set_property("max-size-buffers", 4)
+                queue_trigger.set_property("leaky", 2)  # leak downstream (drop old buffers)
+                audio_appsink = Gst.ElementFactory.make("appsink", "audio-trigger-sink")
+                audio_appsink.set_property("emit-signals", True)
+                audio_appsink.set_property("max-buffers", 2)
+                audio_appsink.set_property("drop", True)
+                audio_appsink.set_property(
+                    "caps",
+                    Gst.Caps.from_string("audio/x-raw,format=S16LE,channels=2,rate=48000"),
+                )
+
+                trigger_mgr = self._trigger_manager
+
+                def _on_audio_sample(appsink):
+                    sample = appsink.emit("pull-sample")
+                    if sample:
+                        buf = sample.get_buffer()
+                        ok, mapinfo = buf.map(Gst.MapFlags.READ)
+                        if ok:
+                            try:
+                                trigger_mgr.add_audio_chunk(bytes(mapinfo.data), channels=2)
+                            finally:
+                                buf.unmap(mapinfo)
+                    return Gst.FlowReturn.OK
+
+                audio_appsink.connect("new-sample", _on_audio_sample)
+
+                pipeline.add(queue_trigger)
+                pipeline.add(audio_appsink)
+                audio_tee.link(queue_trigger)
+                queue_trigger.link(audio_appsink)
         
         # Muxer
         muxer = Gst.ElementFactory.make("mp4mux", "muxer")
@@ -286,22 +307,17 @@ class Recorder:
             self.current_output_path = output_path
         
         try:
-            # Start video captures first (for frame detection)
-            self.video_manager.start_all()
-            
-            # Build and start recording pipeline
             self.recording_pipeline = self.build_recording_pipeline()
             ret = self.recording_pipeline.set_state(Gst.State.PLAYING)
-            
+
             if ret == Gst.StateChangeReturn.FAILURE:
                 raise RuntimeError("Failed to start recording pipeline")
-            
+
             self.is_recording = True
-            
-            # Start frame detection if enabled
-            if self.frame_detector:
-                self.frame_detector.start_monitoring()
-            
+
+            if self._trigger_manager:
+                self._trigger_manager.start_monitoring()
+
             print(f"Recording started: {self.current_output_path}")
         
         except Exception as e:
@@ -313,23 +329,16 @@ class Recorder:
         """Stop recording."""
         if not self.is_recording:
             return
-        
-        # Stop frame detection
-        if self.frame_detector:
-            self.frame_detector.stop_monitoring()
-        
-        # Stop recording pipeline
+
+        if self._trigger_manager:
+            self._trigger_manager.stop_monitoring()
+
         if self.recording_pipeline:
             self.recording_pipeline.set_state(Gst.State.NULL)
             self.recording_pipeline = None
-        
-        # Stop video captures
-        self.video_manager.stop_all()
-        
-        # Stop audio mixer
-        if self.audio_mixer:
-            self.audio_mixer.stop()
-        
+
+        self.audio_captures.clear()
+
         self.is_recording = False
         print(f"Recording stopped: {self.current_output_path}")
     

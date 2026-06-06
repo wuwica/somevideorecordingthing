@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Recording Admin</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Recording Admin</h1>
+    <span id="sse-status" class="badge badge-gray">Connecting…</span>
+  </header>
+
+  <main>
+    <!-- Status card -->
+    <section class="card" id="status-card">
+      <h2>Status</h2>
+      <div class="status-row">
+        <span id="rec-dot" class="dot dot-gray"></span>
+        <span id="rec-label">Not Recording</span>
+      </div>
+      <div class="meta" id="output-path"></div>
+      <div class="meta" id="usb-info">USB: none</div>
+      <div class="meta" id="trigger-info">Trigger: none active</div>
+      <div class="actions">
+        <button id="btn-start" class="btn btn-green" onclick="startRecording()">Start Recording</button>
+        <button id="btn-stop"  class="btn btn-red"   onclick="stopRecording()"  disabled>Stop Recording</button>
+      </div>
+    </section>
+
+    <!-- Audio trigger card -->
+    <section class="card">
+      <h2>Audio Stop Trigger</h2>
+      <div id="audio-trigger-status" class="meta">Not configured</div>
+      <form id="form-audio" onsubmit="uploadAudioTrigger(event)">
+        <label>Reference WAV clip
+          <input type="file" name="file" accept=".wav,.WAV" required />
+        </label>
+        <label>Threshold (0–1)
+          <input type="number" name="threshold" value="0.88" min="0" max="1" step="0.01" />
+        </label>
+        <label>Check interval (s)
+          <input type="number" name="check_interval" value="0.5" min="0.1" step="0.1" />
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn btn-blue">Upload &amp; Apply</button>
+          <button type="button" class="btn btn-gray" onclick="disableTrigger('audio')">Disable</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Frame trigger card -->
+    <section class="card">
+      <h2>Frame Stop Trigger</h2>
+      <div id="frame-trigger-status" class="meta">Not configured</div>
+      <form id="form-frame" onsubmit="uploadFrameTrigger(event)">
+        <label>Reference PNG image
+          <input type="file" name="file" accept=".png,.jpg,.jpeg,.PNG,.JPG" required />
+        </label>
+        <label>Threshold (0–1)
+          <input type="number" name="threshold" value="0.85" min="0" max="1" step="0.01" />
+        </label>
+        <label>Check interval (s)
+          <input type="number" name="check_interval" value="1.0" min="0.1" step="0.1" />
+        </label>
+        <div class="actions">
+          <button type="submit" class="btn btn-blue">Upload &amp; Apply</button>
+          <button type="button" class="btn btn-gray" onclick="disableTrigger('frame')">Disable</button>
+        </div>
+      </form>
+    </section>
+
+    <!-- Devices card -->
+    <section class="card">
+      <h2>Devices</h2>
+      <button class="btn btn-gray" onclick="refreshDevices()" style="margin-bottom:12px">Refresh</button>
+      <h3>Video</h3>
+      <ul id="device-video"></ul>
+      <h3>Audio Sources</h3>
+      <ul id="device-audio-sources"></ul>
+      <h3>Audio Sinks</h3>
+      <ul id="device-audio-sinks"></ul>
+    </section>
+
+    <!-- Toast -->
+    <div id="toast"></div>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>
