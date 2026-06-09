@@ -1,6 +1,9 @@
 """Manages stop triggers: audio (priority) with frame detection as fallback."""
+import logging
 import os
 from typing import Optional, Callable
+
+log = logging.getLogger(__name__)
 
 from src.recording.audio_trigger import AudioTrigger
 from src.recording.frame_detector import FrameDetector
@@ -47,7 +50,7 @@ class TriggerManager:
             if self._callback:
                 self.frame_detector.set_callback(self._callback)
         else:
-            print(f"TriggerManager: frame image not found – {image_path}")
+            log.warning("Frame image not found: %s", image_path)
 
     def set_callback(self, callback: Callable):
         self._callback = callback
@@ -131,14 +134,14 @@ class TriggerManager:
         if self.audio_ready:
             self._active = "audio"
             self.audio_trigger.start_monitoring()
-            print("TriggerManager: using audio trigger (priority)")
+            log.info("Using audio trigger (priority)")
         elif self.frame_ready:
             self._active = "frame"
             self.frame_detector.start_monitoring()
-            print("TriggerManager: using frame trigger (no audio clip configured)")
+            log.info("Using frame trigger (no audio clip configured)")
         else:
             self._active = None
-            print("TriggerManager: no trigger configured, auto-stop disabled")
+            log.info("No trigger configured, auto-stop disabled")
 
     def stop_monitoring(self):
         if self.audio_trigger:
@@ -160,11 +163,11 @@ class TriggerManager:
     def status_dict(self) -> dict:
         return {
             "active_trigger": self._active,
-            "audio": self.audio_trigger.status_dict() if self.audio_trigger else None,
+            "audio": self.audio_trigger.status_dict() if self.audio_trigger else {"loaded": False},
             "frame": {
                 "ready": self.frame_ready,
                 "image_path": self.frame_detector.reference_frame_path if self.frame_detector else None,
                 "threshold": self.frame_detector.threshold if self.frame_detector else None,
                 "check_interval": self.frame_detector.check_interval if self.frame_detector else None,
-            } if self.frame_detector else None,
+            } if self.frame_detector else {"loaded": False},
         }

@@ -1,17 +1,21 @@
 """FastAPI app factory and uvicorn daemon thread launcher."""
 import asyncio
+import logging
 import threading
 from pathlib import Path
 
+log = logging.getLogger(__name__)
+
 import uvicorn
 from fastapi import FastAPI, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 from src.web.sse import sse_bus
-from src.web.routers import recording, triggers, devices
+from src.web.routers import recording, triggers, devices, preview, config
 
-_STATIC_DIR = str(Path(__file__).parent.parent.parent / "web" / "static")
+_STATIC_DIR = Path(__file__).parent.parent.parent / "web" / "static"
+_OVERLAYS_DIR = Path(__file__).parent.parent.parent / "config" / "overlays"
 
 
 def create_app(controller) -> FastAPI:
@@ -22,6 +26,8 @@ def create_app(controller) -> FastAPI:
     app.include_router(recording.router)
     app.include_router(triggers.router)
     app.include_router(devices.router)
+    app.include_router(preview.router)
+    app.include_router(config.router)
 
     @app.get("/events")
     async def sse_endpoint(request: Request):
@@ -41,8 +47,15 @@ def create_app(controller) -> FastAPI:
     def status(request: Request):
         return request.app.state.controller.get_status()
 
-    if Path(_STATIC_DIR).exists():
-        app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+    if _STATIC_DIR.exists():
+        @app.get("/")
+        def admin_index():
+            return FileResponse(_STATIC_DIR / "index.html")
+
+        app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
+
+    _OVERLAYS_DIR.mkdir(parents=True, exist_ok=True)
+    app.mount("/overlays", StaticFiles(directory=str(_OVERLAYS_DIR)), name="overlays")
 
     return app
 
@@ -55,18 +68,19 @@ def start_web_server(controller, host: str = "0.0.0.0", port: int = 8080) -> thr
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         sse_bus.set_loop(loop)
-        config = uvicorn.Config(
+        controller._preview_manager.set_loop(loop)
+        cfg = uvicorn.Config(
             app,
             host=host,
             port=port,
-            loop="none",   # we manage the loop ourselves
+            loop="none",
             log_level="warning",
             access_log=False,
         )
-        server = uvicorn.Server(config)
+        server = uvicorn.Server(cfg)
         loop.run_until_complete(server.serve())
 
     thread = threading.Thread(target=run, daemon=True, name="web-server")
     thread.start()
-    print(f"Admin UI: http://{host}:{port}")
+    log.info("Admin UI: http://%s:%d", host, port)
     return thread

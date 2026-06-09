@@ -1,7 +1,10 @@
 """Frame comparison for auto-stop functionality using perceptual hashing."""
+import logging
 import threading
 import time
 from typing import Optional
+
+log = logging.getLogger(__name__)
 
 import imagehash
 import numpy as np
@@ -38,22 +41,20 @@ class FrameDetector:
             img = Image.open(self.reference_frame_path).convert("L")
             self.reference_hash = imagehash.phash(img)
         except Exception as e:
-            print(f"FrameDetector: could not load reference frame – {e}")
+            log.error("Could not load reference frame: %s", e, exc_info=True)
 
     def set_callback(self, callback: callable):
         self.callback = callback
 
     def add_frame(self, frame_data: bytes, width: int, height: int):
-        """Receive a raw YUY2 frame from the recording pipeline."""
+        """Receive a raw GRAY8 frame from the recording pipeline."""
         with self._lock:
             self._frame_queue.append((frame_data, width, height))
 
     def _similarity(self, frame_data: bytes, width: int, height: int) -> float:
-        """Convert YUY2 → grayscale PIL Image, compute pHash similarity."""
-        # Extract Y (luminance) channel: every other byte starting at 0
-        yuy2 = np.frombuffer(frame_data, dtype=np.uint8)
-        y = yuy2[0::2][:width * height].reshape((height, width))
-        img = Image.fromarray(y, mode="L")
+        """Convert GRAY8 → PIL Image, compute pHash similarity."""
+        gray = np.frombuffer(frame_data, dtype=np.uint8).reshape((height, width))
+        img = Image.fromarray(gray, mode="L")
         frame_hash = imagehash.phash(img)
         distance = self.reference_hash - frame_hash  # Hamming distance (0–64)
         return 1.0 - distance / 64.0
@@ -71,13 +72,13 @@ class FrameDetector:
                     similarity = self._similarity(frame_data, width, height)
                     if similarity >= self.threshold:
                         hamming = round((1.0 - similarity) * 64)
-                        print(f"FrameDetector: stop frame detected (similarity={similarity:.3f}, hamming={hamming})")
+                        log.info("Stop frame detected (similarity=%.3f, hamming=%d)", similarity, hamming)
                         if self.callback:
                             self.callback()
                         self.stop_monitoring()
                         return
                 except Exception as e:
-                    print(f"FrameDetector: comparison error – {e}")
+                    log.error("Frame comparison error: %s", e, exc_info=True)
 
             time.sleep(self.check_interval)
 
@@ -85,7 +86,7 @@ class FrameDetector:
         if self.is_monitoring:
             return
         if self.reference_hash is None:
-            print("FrameDetector: no reference hash loaded, cannot start monitoring")
+            log.warning("No reference hash loaded, cannot start monitoring")
             return
         self.is_monitoring = True
         self._monitor_thread = threading.Thread(target=self._monitor_loop, daemon=True)

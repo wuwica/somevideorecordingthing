@@ -19,12 +19,104 @@ header {
 header h1 { font-size: 1.25rem; font-weight: 700; }
 
 main {
-  max-width: 760px;
+  max-width: 960px;
   margin: 0 auto;
   padding: 24px 16px;
   display: flex;
   flex-direction: column;
   gap: 20px;
+}
+
+.preview-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+#preview-canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: none;
+}
+
+#preview-canvas.visible {
+  display: block;
+}
+
+.preview-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 0.9rem;
+  pointer-events: none;
+}
+
+.preview-placeholder.hidden {
+  display: none;
+}
+
+.cameras-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 16px;
+}
+
+.camera-card {
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.camera-card h3 {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 0.8rem;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border-bottom: 1px solid #2d3148;
+}
+
+.camera-wrap {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  background: #0f1117;
+}
+
+.camera-wrap img,
+.camera-wrap canvas {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: none;
+}
+
+.camera-wrap img.visible,
+.camera-wrap canvas.visible {
+  display: block;
+}
+
+.camera-placeholder {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #64748b;
+  font-size: 0.8rem;
+}
+
+.camera-placeholder.hidden {
+  display: none;
 }
 
 .card {
@@ -99,6 +191,143 @@ ul li:last-child { border-bottom: none; }
 .badge-gray  { background: #334155; color: #94a3b8; }
 .badge-green { background: #14532d; color: #4ade80; }
 .badge-red   { background: #450a0a; color: #f87171; }
+
+select {
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 5px;
+  color: #e2e8f0;
+  padding: 6px 10px;
+  font-size: 0.9rem;
+}
+
+.source-row {
+  border: 1px solid #2d3148;
+  border-radius: 7px;
+  padding: 12px;
+  margin-bottom: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.source-row-header {
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: #94a3b8;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.source-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+}
+
+.source-fields label {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.source-fields input[type="number"] {
+  width: 80px;
+}
+
+.sources-output-row { margin-top: 16px; }
+
+.sources-output-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: flex-end;
+  margin-top: 8px;
+}
+
+.sources-output-fields label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.sources-output-fields input[type="number"] {
+  width: 90px;
+}
+
+.canvas-wrap {
+  margin-bottom: 16px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+#layout-canvas {
+  background: #0a0c14;
+  border: 1px solid #2d3148;
+  border-radius: 6px;
+  cursor: default;
+  max-width: 100%;
+}
+
+.canvas-hint {
+  font-size: 0.78rem;
+}
+
+.overlay-item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 12px;
+  border: 1px solid #2d3148;
+  border-radius: 7px;
+  margin-bottom: 10px;
+}
+
+.overlay-thumb {
+  width: 80px;
+  height: 60px;
+  object-fit: contain;
+  background: #0f1117;
+  border: 1px solid #2d3148;
+  border-radius: 4px;
+}
+
+.overlay-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.overlay-fields label {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 5px;
+  font-size: 0.82rem;
+  color: #64748b;
+  white-space: nowrap;
+}
+
+.overlay-fields input[type="number"] {
+  width: 70px;
+}
+
+.btn-sm {
+  padding: 5px 12px;
+  font-size: 0.82rem;
+}
 
 #toast {
   position: fixed;

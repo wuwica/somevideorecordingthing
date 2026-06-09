@@ -4,7 +4,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Recording Admin</title>
-  <link rel="stylesheet" href="style.css" />
+  <link rel="stylesheet" href="/static/style.css" />
 </head>
 <body>
   <header>
@@ -13,6 +13,24 @@
   </header>
 
   <main>
+    <!-- Recording layout preview (HDMI) -->
+    <section class="card" id="preview-card">
+      <h2>Recording Preview (HDMI)</h2>
+      <div id="preview-status" class="meta">Starting preview…</div>
+      <div class="preview-wrap">
+        <canvas id="preview-canvas" width="640" height="360"></canvas>
+        <div id="preview-placeholder" class="preview-placeholder">Waiting for video…</div>
+      </div>
+    </section>
+
+    <!-- Per-device previews -->
+    <section class="card" id="cameras-card">
+      <h2>Device Previews</h2>
+      <div id="cameras-grid" class="cameras-grid">
+        <p class="meta">Loading sources…</p>
+      </div>
+    </section>
+
     <!-- Status card -->
     <section class="card" id="status-card">
       <h2>Status</h2>
@@ -71,6 +89,57 @@
       </form>
     </section>
 
+    <!-- Sources / Layout configuration card -->
+    <section class="card" id="sources-card">
+      <h2>Sources &amp; Layout</h2>
+
+      <!-- Visual canvas layout editor -->
+      <div class="canvas-wrap">
+        <canvas id="layout-canvas" width="640" height="360"></canvas>
+        <div class="canvas-hint meta">Drag sources and overlays to reposition</div>
+      </div>
+
+      <!-- Per-source config rows -->
+      <div id="sources-config-list">
+        <p class="meta">Loading…</p>
+      </div>
+
+      <div class="sources-output-row">
+        <h3>Output</h3>
+        <div class="sources-output-fields">
+          <label>Width <input type="number" id="out-width" min="320" max="3840" step="2" oninput="drawCanvas()" /></label>
+          <label>Height <input type="number" id="out-height" min="240" max="2160" step="2" oninput="drawCanvas()" /></label>
+          <label>FPS <input type="number" id="out-fps" min="1" max="120" /></label>
+        </div>
+      </div>
+      <div class="actions">
+        <button class="btn btn-blue" onclick="applySourcesConfig()">Apply</button>
+        <button class="btn btn-gray" onclick="loadSourcesConfig()">Reset</button>
+      </div>
+    </section>
+
+    <!-- Overlays card -->
+    <section class="card" id="overlays-card">
+      <h2>Overlays</h2>
+      <div id="overlays-list"></div>
+      <h3>Add Overlay</h3>
+      <form id="form-overlay" onsubmit="uploadOverlay(event)">
+        <label>Image (PNG / JPEG)
+          <input type="file" name="file" accept=".png,.jpg,.jpeg" required />
+        </label>
+        <div class="sources-output-fields">
+          <label>X <input type="number" name="x" value="0" min="0" /></label>
+          <label>Y <input type="number" name="y" value="0" min="0" /></label>
+          <label>Width <input type="number" name="width" value="200" min="1" /></label>
+          <label>Height <input type="number" name="height" value="200" min="1" /></label>
+          <label>Opacity <input type="number" name="opacity" value="1" min="0" max="1" step="0.05" /></label>
+        </div>
+        <div class="actions">
+          <button type="submit" class="btn btn-blue">Upload &amp; Add</button>
+        </div>
+      </form>
+    </section>
+
     <!-- Devices card -->
     <section class="card">
       <h2>Devices</h2>
@@ -83,10 +152,9 @@
       <ul id="device-audio-sinks"></ul>
     </section>
 
-    <!-- Toast -->
     <div id="toast"></div>
   </main>
 
-  <script src="app.js"></script>
+  <script src="/static/app.js"></script>
 </body>
 </html>

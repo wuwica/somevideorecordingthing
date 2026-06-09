@@ -43,3 +43,7 @@ Thumbs.db
 # Config (user-specific)
 config/user_*.json
 
+.claude/
+.env 
+.venv/
+CLAUDE.md

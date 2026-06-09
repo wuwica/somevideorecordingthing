@@ -1,17 +1,43 @@
 """Main recording controller orchestrating video/audio capture and composition."""
+import logging
 import gi
+
+log = logging.getLogger(__name__)
 gi.require_version('Gst', '1.0')
 from gi.repository import Gst
-from typing import Optional, Dict, List, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 import os
 from datetime import datetime
 
-from src.capture.audio_capture import AudioCapture, AudioMixer
+from src.capture.v4l2_pipeline import add_v4l2_source_branch, configure_compositor
 from src.composition.layout_engine import LayoutEngine
 from src.composition.overlay_manager import OverlayManager
+from src.composition.transform import add_circle_mask, add_polygon_mask, add_rect_mask
+
+
+def _apply_mask(pipeline, prefix: str, prev, source_config: dict):
+    """Apply mask from source config. Returns last linked element."""
+    mask_shape = source_config.get("mask_shape", "rect")
+    mp = source_config.get("mask_position") or {}
+    ms = source_config.get("mask_size") or {}
+    mx, my = mp.get("x"), mp.get("y")
+    mw, mh = ms.get("width"), ms.get("height")
+    has_area = mx is not None and my is not None and mw and mh
+    if mask_shape == "circle":
+        return add_circle_mask(pipeline, prefix, prev,
+                               mx if has_area else None, my if has_area else None,
+                               mw if has_area else None, mh if has_area else None)
+    if mask_shape == "rect" and has_area:
+        return add_rect_mask(pipeline, prefix, prev, mx, my, mw, mh)
+    if mask_shape == "polygon":
+        pts = source_config.get("mask_points") or []
+        if len(pts) >= 3:
+            return add_polygon_mask(pipeline, prefix, prev, pts)
+    return prev
 
 if TYPE_CHECKING:
     from src.recording.trigger_manager import TriggerManager
+    from src.preview.preview_manager import PreviewManager
 
 
 class Recorder:
@@ -21,10 +47,11 @@ class Recorder:
         self.config_path = config_path
         self.output_directory = output_directory
         self.layout_engine = LayoutEngine(config_path)
-        self.audio_captures: List[AudioCapture] = []
-        self.audio_mixer: Optional[AudioMixer] = None
+        # List of dicts with keys: source_name (str), source_type ('source'|'sink')
+        self.audio_captures: List[dict] = []
         self.overlay_manager: Optional[OverlayManager] = None
         self._trigger_manager: Optional["TriggerManager"] = None
+        self._preview_manager: Optional["PreviewManager"] = None
 
         self.recording_pipeline: Optional[Gst.Pipeline] = None
         self.is_recording = False
@@ -38,6 +65,10 @@ class Recorder:
     def set_trigger_manager(self, trigger_manager: "TriggerManager"):
         """Inject the TriggerManager used for audio/frame stop triggers."""
         self._trigger_manager = trigger_manager
+
+    def set_preview_manager(self, preview_manager: "PreviewManager"):
+        """Inject PreviewManager for live preview tee during recording."""
+        self._preview_manager = preview_manager
     
     def _setup_from_config(self):
         """Setup components based on configuration."""
@@ -45,35 +76,24 @@ class Recorder:
         overlays_config = config.get("overlays", [])
         self.overlay_manager = OverlayManager(overlays_config)
     
-    def add_video_source(self, device_path: str, source_id: str):
-        """Register a video source for inclusion in the next recording pipeline."""
-        # Sources are built directly from layout_engine.config in build_recording_pipeline.
-        # This method exists so RecordingController can declare devices; the config is the
-        # authoritative source of device paths actually used in the pipeline.
-    
     def setup_audio(self, mic_source: Optional[str] = None, game_audio_source: Optional[str] = None):
-        """Setup audio capture sources."""
+        """Setup audio capture sources. Only adds sources when actual device names are detected."""
         config = self.layout_engine.config
         audio_config = config.get("audio", {})
-        
-        # Clear existing audio captures
+
         self.audio_captures.clear()
-        
-        # Add microphone if enabled
-        if audio_config.get("mic_enabled", True):
-            mic_name = mic_source or audio_config.get("mic_source", "default")
-            mic_capture = AudioCapture(mic_name, source_type='source')
-            self.audio_captures.append(mic_capture)
-        
-        # Add game audio if enabled
-        if audio_config.get("game_audio_enabled", True):
-            game_name = game_audio_source or audio_config.get("game_audio_source", "default")
-            game_capture = AudioCapture(game_name, source_type='sink')
-            self.audio_captures.append(game_capture)
-        
-        # Create audio mixer if we have audio sources
-        if self.audio_captures:
-            self.audio_mixer = AudioMixer(self.audio_captures)
+
+        # Only add audio when a real device name was discovered — "default" with no
+        # PulseAudio running causes the recording pipeline to fail immediately.
+        if audio_config.get("mic_enabled", True) and mic_source:
+            self.audio_captures.append({"source_name": mic_source, "source_type": "source"})
+        elif audio_config.get("mic_enabled", True):
+            log.warning("Mic audio disabled — no PulseAudio device detected")
+
+        if audio_config.get("game_audio_enabled", True) and game_audio_source:
+            self.audio_captures.append({"source_name": game_audio_source, "source_type": "sink"})
+        elif audio_config.get("game_audio_enabled", True):
+            log.warning("Game audio disabled — no PulseAudio device detected")
     
     def build_recording_pipeline(self) -> Gst.Pipeline:
         """Build the complete recording pipeline."""
@@ -87,58 +107,123 @@ class Recorder:
         
         # Create compositor
         compositor = Gst.ElementFactory.make("compositor", "compositor")
+        configure_compositor(compositor)
         pipeline.add(compositor)
         
         # Build video sources and link to compositor
         sources_config = self.layout_engine.config.get("sources", [])
-        for i, source_config in enumerate(sources_config):
+        compositor_index = 0
+        for source_config in sources_config:
             source_id = source_config.get("id")
             device_path = source_config.get("device")
-            
-            # Create video source pipeline
-            source = Gst.ElementFactory.make("v4l2src", f"source-{source_id}")
-            source.set_property("device", device_path)
-            
-            videoconvert = Gst.ElementFactory.make("videoconvert", f"convert-{source_id}")
-            videoscale = Gst.ElementFactory.make("videoscale", f"scale-{source_id}")
-            
-            # Set source size
+            if not device_path or not os.path.exists(device_path):
+                log.warning("Skipping %s (%s not available)", source_id, device_path)
+                continue
+
             size = source_config.get("size", {"width": width, "height": height})
-            caps = Gst.Caps.from_string(
-                f"video/x-raw,width={size.get('width', width)},height={size.get('height', height)},framerate={fps}/1"
+            target_w = size.get("width", width)
+            target_h = size.get("height", height)
+
+            source_fps = source_config.get("fps") or fps
+            caps_filter, _fmt = add_v4l2_source_branch(
+                pipeline,
+                f"rec-{source_id}",
+                device_path,
+                target_w,
+                target_h,
+                fps=source_fps,
+                capabilities=source_config.get("capabilities"),
+                source_type=source_config.get("type", ""),
+                formats=source_config.get("formats"),
+                input_width=source_config.get("capture_width"),
+                input_height=source_config.get("capture_height"),
+                input_format=source_config.get("capture_format"),
+                rotation=source_config.get("rotation", 0),
             )
-            caps_filter = Gst.ElementFactory.make("capsfilter", f"caps-{source_id}")
-            caps_filter.set_property("caps", caps)
-            
-            pipeline.add(source)
-            pipeline.add(videoconvert)
-            pipeline.add(videoscale)
-            pipeline.add(caps_filter)
-            
-            source.link(videoconvert)
-            videoconvert.link(videoscale)
-            videoscale.link(caps_filter)
-            
-            # Request sink pad from compositor
-            sink_pad = compositor.get_request_pad(f"sink_{i}")
-            
-            # Set pad properties
+            if not caps_filter:
+                log.error("Could not link %s (%s)", source_id, device_path)
+                continue
+
+            last = caps_filter
+            last = _apply_mask(pipeline, f"rec-{source_id}", last, source_config)
+
+            # HDMI-only frame detection branch (tee → scale 160×120 → GRAY8 → appsink)
+            is_hdmi = source_config.get("type") == "hdmi"
+            if is_hdmi and self._trigger_manager and self._trigger_manager.frame_ready:
+                tee = Gst.ElementFactory.make("tee", f"rec-{source_id}-frame-tee")
+                q_comp = Gst.ElementFactory.make("queue", f"rec-{source_id}-frame-q-comp")
+                q_det  = Gst.ElementFactory.make("queue", f"rec-{source_id}-frame-q-det")
+                q_det.set_property("max-size-buffers", 1)
+                q_det.set_property("leaky", 2)
+                det_scale   = Gst.ElementFactory.make("videoscale",   f"rec-{source_id}-det-scale")
+                det_conv    = Gst.ElementFactory.make("videoconvert",  f"rec-{source_id}-det-conv")
+                det_caps_el = Gst.ElementFactory.make("capsfilter",    f"rec-{source_id}-det-caps")
+                det_caps_el.set_property(
+                    "caps", Gst.Caps.from_string("video/x-raw,format=GRAY8,width=160,height=120")
+                )
+                det_sink = Gst.ElementFactory.make("appsink", f"rec-{source_id}-det-sink")
+                det_sink.set_property("emit-signals", True)
+                det_sink.set_property("max-buffers", 1)
+                det_sink.set_property("drop", True)
+                det_sink.set_property("sync", False)
+
+                for el in (tee, q_comp, q_det, det_scale, det_conv, det_caps_el, det_sink):
+                    pipeline.add(el)
+
+                last.link(tee)
+                tee.link(q_comp)
+                det_tee_pad = tee.request_pad_simple("src_%u")
+                if det_tee_pad is None:
+                    log.error("Failed to request tee src pad for frame detector on %s", source_id)
+                else:
+                    det_tee_pad.link(q_det.get_static_pad("sink"))
+                q_det.link(det_scale)
+                det_scale.link(det_conv)
+                det_conv.link(det_caps_el)
+                det_caps_el.link(det_sink)
+
+                trigger_mgr = self._trigger_manager
+
+                def _on_frame(appsink, _tm=trigger_mgr):
+                    sample = appsink.emit("pull-sample")
+                    if sample:
+                        buf = sample.get_buffer()
+                        ok, mapinfo = buf.map(Gst.MapFlags.READ)
+                        if ok:
+                            try:
+                                _tm.add_frame(bytes(mapinfo.data), 160, 120)
+                            finally:
+                                buf.unmap(mapinfo)
+                    return Gst.FlowReturn.OK
+
+                det_sink.connect("new-sample", _on_frame)
+                last = q_comp  # compositor gets frames from the main tee branch
+
+            sink_pad = compositor.request_pad_simple(f"sink_{compositor_index}")
+            if sink_pad is None:
+                log.error("Failed to request compositor sink pad %d", compositor_index)
+                continue  # skip this source
+
             position = source_config.get("position", {"x": 0, "y": 0})
-            z_order = source_config.get("z_order", i)
-            
+            z_order = source_config.get("z_order", compositor_index)
+
             sink_pad.set_property("xpos", position.get("x", 0))
             sink_pad.set_property("ypos", position.get("y", 0))
-            sink_pad.set_property("width", size.get("width", width))
-            sink_pad.set_property("height", size.get("height", height))
+            sink_pad.set_property("width", target_w)
+            sink_pad.set_property("height", target_h)
             sink_pad.set_property("zorder", z_order)
-            
-            # Link source to compositor
-            src_pad = caps_filter.get_static_pad("src")
-            src_pad.link(sink_pad)
-            
-            # Store compositor reference
+
+            last.get_static_pad("src").link(sink_pad)
+
             self.layout_engine.compositor = compositor
-        
+            compositor_index += 1
+
+        # Static image overlays
+        if self.overlay_manager:
+            compositor_index = self.overlay_manager.add_overlays_to_pipeline(
+                pipeline, compositor, compositor_index, fps
+            )
+
         # Video converter after composition
         videoconvert_final = Gst.ElementFactory.make("videoconvert", "final-convert")
         caps_final = Gst.Caps.from_string(
@@ -165,8 +250,18 @@ class Recorder:
         
         pipeline.add(video_encoder)
         pipeline.add(video_parser)
-        
-        caps_filter_final.link(video_encoder)
+
+        if self._preview_manager:
+            video_tee = Gst.ElementFactory.make("tee", "video-tee")
+            queue_enc = Gst.ElementFactory.make("queue", "video-queue-enc")
+            pipeline.add(video_tee)
+            pipeline.add(queue_enc)
+            caps_filter_final.link(video_tee)
+            video_tee.link(queue_enc)
+            queue_enc.link(video_encoder)
+            self._preview_manager.add_preview_branch(pipeline, video_tee, prefix="preview-rec")
+        else:
+            caps_filter_final.link(video_encoder)
         video_encoder.link(video_parser)
         
         # Audio encoder (if audio sources exist)
@@ -178,12 +273,14 @@ class Recorder:
             
             # Add each audio source to pipeline and link to mixer
             for i, audio_capture in enumerate(self.audio_captures):
-                if audio_capture.source_type == 'source':
-                    source = Gst.ElementFactory.make("pulsesrc", f"audio-source-{i}")
-                    source.set_property("device", audio_capture.source_name)
+                source = Gst.ElementFactory.make("pulsesrc", f"audio-source-{i}")
+                if source is None:
+                    log.warning("pulsesrc plugin unavailable — skipping audio source %d", i)
+                    continue
+                if audio_capture["source_type"] == "source":
+                    source.set_property("device", audio_capture["source_name"])
                 else:
-                    source = Gst.ElementFactory.make("pulsesrc", f"audio-source-{i}")
-                    source.set_property("device", f"{audio_capture.source_name}.monitor")
+                    source.set_property("device", f"{audio_capture['source_name']}.monitor")
                 
                 audioconvert = Gst.ElementFactory.make("audioconvert", f"audio-convert-{i}")
                 audioresample = Gst.ElementFactory.make("audioresample", f"audio-resample-{i}")
@@ -201,7 +298,10 @@ class Recorder:
                 audioresample.link(caps_filter)
                 
                 # Link to mixer
-                sink_pad = audio_mixer.get_request_pad(f"sink_{i}")
+                sink_pad = audio_mixer.request_pad_simple(f"sink_{i}")
+                if sink_pad is None:
+                    log.error("Failed to request audiomixer sink pad %d", i)
+                    continue
                 src_pad = caps_filter.get_static_pad("src")
                 src_pad.link(sink_pad)
             
@@ -311,6 +411,11 @@ class Recorder:
             ret = self.recording_pipeline.set_state(Gst.State.PLAYING)
 
             if ret == Gst.StateChangeReturn.FAILURE:
+                bus = self.recording_pipeline.get_bus()
+                msg = bus.pop_filtered(Gst.MessageType.ERROR)
+                if msg:
+                    err, dbg = msg.parse_error()
+                    log.error("Pipeline error: %s | %s", err, dbg)
                 raise RuntimeError("Failed to start recording pipeline")
 
             self.is_recording = True
@@ -318,10 +423,10 @@ class Recorder:
             if self._trigger_manager:
                 self._trigger_manager.start_monitoring()
 
-            print(f"Recording started: {self.current_output_path}")
-        
+            log.info("Recording started: %s", self.current_output_path)
+
         except Exception as e:
-            print(f"Error starting recording: {e}")
+            log.error("Error starting recording: %s", e, exc_info=True)
             self.stop_recording()
             raise
     
@@ -337,10 +442,8 @@ class Recorder:
             self.recording_pipeline.set_state(Gst.State.NULL)
             self.recording_pipeline = None
 
-        self.audio_captures.clear()
-
         self.is_recording = False
-        print(f"Recording stopped: {self.current_output_path}")
+        log.info("Recording stopped: %s", self.current_output_path)
     
     def get_output_path(self) -> Optional[str]:
         """Get current recording output path."""

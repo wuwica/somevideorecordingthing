@@ -1,8 +1,11 @@
 """Audio fingerprint-based trigger for auto-stop functionality."""
+import logging
 import os
 import threading
 import time
 from typing import Optional, Callable
+
+log = logging.getLogger(__name__)
 
 import numpy as np
 
@@ -57,7 +60,7 @@ class AudioTrigger:
         if not self.reference_clip_path or not os.path.exists(self.reference_clip_path):
             return
         if not SCIPY_AVAILABLE:
-            print("AudioTrigger: scipy not available – audio trigger disabled.")
+            log.warning("scipy not available – audio trigger disabled")
             return
         try:
             rate, data = wavfile.read(self.reference_clip_path)
@@ -68,9 +71,9 @@ class AudioTrigger:
             self.ref_samples = len(mono)
             self.reference_fingerprint = self._spectral_fingerprint(mono)
             duration = self.ref_samples / self.TARGET_SAMPLE_RATE
-            print(f"AudioTrigger: loaded '{os.path.basename(self.reference_clip_path)}' ({duration:.2f}s)")
+            log.info("Loaded '%s' (%.2fs)", os.path.basename(self.reference_clip_path), duration)
         except Exception as exc:
-            print(f"AudioTrigger: failed to load reference clip – {exc}")
+            log.error("Failed to load reference clip: %s", exc, exc_info=True)
 
     @staticmethod
     def _to_mono_float(data: np.ndarray) -> np.ndarray:
@@ -133,7 +136,7 @@ class AudioTrigger:
                 if len(self._buffer) > self._max_buffer_samples:
                     self._buffer = self._buffer[-self._max_buffer_samples:]
         except Exception as exc:
-            print(f"AudioTrigger: add_audio_chunk error – {exc}")
+            log.error("add_audio_chunk error: %s", exc)
 
     # --------------------------------------------------------------- monitoring
 
@@ -184,7 +187,7 @@ class AudioTrigger:
                     best = sim
 
             if best >= self.threshold:
-                print(f"AudioTrigger: match detected (similarity={best:.3f})")
+                log.info("Match detected (similarity=%.3f)", best)
                 if self.callback:
                     self.callback()
                 self.stop_monitoring()

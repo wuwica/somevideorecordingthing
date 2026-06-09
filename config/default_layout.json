@@ -3,7 +3,7 @@
     {
       "id": "hdmi",
       "type": "hdmi",
-      "device": "/dev/video0",
+      "device": "/dev/video7",
       "position": {"x": 0, "y": 0},
       "size": {"width": 1920, "height": 1080},
       "z_order": 0
@@ -11,24 +11,18 @@
     {
       "id": "camera1",
       "type": "usb",
-      "device": "/dev/video1",
+      "device": "/dev/video4",
       "position": {"x": 1600, "y": 0},
       "size": {"width": 320, "height": 240},
       "z_order": 1
     }
   ],
-  "overlays": [
-    {
-      "image": "config/overlays/logo.png",
-      "position": {"x": 10, "y": 10},
-      "size": {"width": 200, "height": 100},
-      "opacity": 0.8
-    }
-  ],
+  "overlays": [],
   "output": {
     "width": 1920,
     "height": 1080,
-    "fps": 30
+    "fps": 30,
+    "output_subpath": "yume/game"
   },
   "stop_frame": {
     "enabled": true,
@@ -43,4 +37,3 @@
     "game_audio_source": "default"
   }
 }
-

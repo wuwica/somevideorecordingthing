@@ -1,16 +1,6 @@
 """Pydantic request/response models for the admin API."""
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import Optional
-
-
-class TriggerAudioConfig(BaseModel):
-    threshold: float = Field(0.88, ge=0.0, le=1.0)
-    check_interval: float = Field(0.5, gt=0.0)
-
-
-class TriggerFrameConfig(BaseModel):
-    threshold: float = Field(0.85, ge=0.0, le=1.0)
-    check_interval: float = Field(1.0, gt=0.0)
 
 
 class RecordingStatusResponse(BaseModel):
